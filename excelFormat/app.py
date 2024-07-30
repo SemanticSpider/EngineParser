@@ -1,131 +1,110 @@
-import kivy
-from kivy.app import App
+from kivymd.app import MDApp
 from kivy.lang import Builder
+from kivy.core.window import Window
+from kivymd.uix.screen import MDScreen
+from kivymd.uix.card import MDCard
+from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.floatlayout import MDFloatLayout
+from kivy.properties import StringProperty, ObjectProperty
 from kivy.uix.button import Button
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.image import Image
-from kivy.uix.textinput import TextInput
-from kivy.graphics import Rectangle, Color, Ellipse
+from kivymd.uix.button import MDButton
 from plyer import filechooser
+import os
 
+class LoadCard(MDCard):
 
-# red = [1,1,0,1,]
-# green = [0,1,0,1]
-# blue =  [0,0,1,1]
-# purple = [1,0,1,1]
+    loadFile = StringProperty()
+    label = StringProperty()
+    cardColor = ObjectProperty()
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.theme_cls.theme_style_switch_animation = True
+        self.theme_cls.theme_style_switch_animation_duration = 0.5
+        Window.bind(on_drop_file=self.selectFile)
+        
+    # Метод, вызываемый при нажатии на кнопку загрузки файла
+    def changeFile(self):        
+        # Выбор фалйа в filechooser
+        choose = filechooser.open_file(on_selection=self.selectFile)
 
-# class ButtonApp(App):
-#     def build(self):
-#         layout = BoxLayout(padding=10, spacing=10, orientation='vertical')
-#         colors = [red, green, blue, purple]
-#         for i in range(len(colors)):
-#             color = random.choice(colors)
-#             btn = Button(text=f"Button #{i}",
-#                          background_color=color
-#                          )
-#             colors.remove(color)
-#             btn.bind(on_press=self.on_press_button)
-#             layout.add_widget(btn)
-#         return layout
-#     def on_press_button(self, instance):
-#         print(f"Вы нажали на кнопку {instance}")
+    # Обработчик события выбора файла в filechooser, записывает путь к выбранному файлу в поле loadFile
+    def selectFile(self, *args):
+        # Получаем путь к файлу
+        if(type(args[0]) == list):
+            # Из filechooser
+            self.loadFile = args[0][0] if len(args[0]) != 0 else self.loadFile
+        else:
+            # Из Drag-n-Drop
+            self.loadFile = args[1].decode(encoding="utf-8")
+        
+        # Осуществляем проверку Excel расширения
+        if self.loadFile and self.loadFile.endswith((".xls", ".xlt", ".xlsx", ".xlsm", ".xltx", ".xltm")):
+            self.cardColor = [0.0, 0.5019607843137255, 0.0, 0.3]
+            self.label = "Файл {} загружен!".format(self.loadFile.split('\\').pop())
+        elif self.loadFile == "":
+            pass        
+        else: 
+            self.cardColor = [1.0, 0.0, 0.0, 0.5]
+            self.label = "Принимаются только файлы excel!"
+            self.loadFile = ""
+        print(self.loadFile)
 
-# class MainApp(App):
-#     def build(self):
-#         self.operators = ["/", "*", "+", "-"]
-#         self.last_was_operator = None
-#         self.last_button = None
-#         main_layout = BoxLayout(orientation="vertical")
-#         self.solution = TextInput(
-#             multiline=False, readonly=True, halign="right", font_size=55
-#         )
-#         main_layout.add_widget(self.solution)
-#         buttons = [
-#             ["7", "8", "9", "/"],
-#             ["4", "5", "6", "*"],
-#             ["1", "2", "3", "-"],
-#             [".", "0", "C", "+"]
-#         ]
-#         for row in buttons:
-#             h_layout = BoxLayout()
-#             for label in row:
-#                 button = Button(
-#                     text=label,
-#                     pos_hint={"center_x": 0.5, "center_y": 0.5}
-#                 )
-#                 button.bind(on_press=self.on_button_press)
-#                 h_layout.add_widget(button)
-#             main_layout.add_widget(h_layout)
-#         equals_button = Button(
-#             text="=", pos_hint={"center_x": 0.5, "center_y": 0.5}
-#         )
-#         equals_button.bind(on_press=self.on_solution)
-#         main_layout.add_widget(equals_button)
-
-#         return main_layout
+    # Ограничиваем дефолтное поведение карточки, чтобы убрать автоматическое изменение цвета
+    def set_properties_widget(self):
+        super().set_properties_widget()
+        self.md_bg_color = self.cardColor
+        return True
     
-#     def on_button_press(self, instance):
-#         current = self.solution.text
-#         button_text = instance.text
+class LoadDirectory(MDBoxLayout):
 
-#         if button_text == "C":
-#             self.solution.text = ""
-#         else:
-#             if current and (self.last_was_operator and button_text in self.operators):
-#                 return
-#             elif current == "" and button_text in self.operators:
-#                 return
-#             else:
-#                 new_text = current + button_text
-#                 self.solution.text = new_text
-#         self.last_button = button_text
-#         self.last_was_operator = self.last_button in self.operators
+    labelText = StringProperty()
 
-#     def on_solution(self, instance):
-#         text = self.solution.text
-#         if text:
-#             solution = str(eval(self.solution.text))
-#             self.solution.text = solution
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-# class Filechooser(App):
-#     def build(self):
-#         Window.bind(on_drop_file=self.onFileDrop)
+        with open(os.path.dirname(os.path.realpath(__file__)) + "\\loadDirectory.txt", "a+") as loadDir:
+            loadDir.seek(0, 0)
+            self.labelText = loadDir.read()
     
-#     def onFileDrop(self, window, file_path, *args):
-#         print(file_path)
-# class Filechooser(BoxLayout):
-#    def select(self, *args):
-#       try:
-#          self.img.source = args[1][0]
-#       except:
-#          print ('error')
-         
-# class FileIconApp(App):
-#    def build(self):
-#       return Filechooser()
+    def chooseDirectory(self):
 
-# # run the App
-# if __name__ == '__main__':
-#    FileIconApp().run()
+        def selectDirectory(selectedDirectory):
+            self.labelText = selectedDirectory = selectedDirectory[0] if(len(selectedDirectory)) != 0 else self.labelText
+            with open(os.path.dirname(os.path.realpath(__file__)) + "\\loadDirectory.txt", "w") as loadDir:
+                loadDir.write(self.labelText)
 
-class Root(BoxLayout):
+        directory = filechooser.choose_dir(on_selection=selectDirectory)
 
-   def __init__(self, **kwargs):
-      super().__init__()
+class LaunchButton(MDButton):
+    def launchParse(self):
+        print(self)
 
-   def file_chooser(self, *args):
-      filechooser.open_file(on_selection=self.selected)
+# Класс окна
+class Root(MDScreen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-   def selected(self, selection):
-      print(selection)
+class EngineParser(MDApp):
 
-   def onFileDrop(self, window, file_path, *args):
-      print(file_path)
+    # Дефолтные настройки приложения
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        Window.maximize()
+ 
+    def build(self):
+        self.theme_cls.primary_palette = "Green"
+        self.screen = Root()
 
-class EngineParser(App):
-   pass
+        loadCard = LoadCard(loadFile = "", label="Загрузите файл", cardColor=self.theme_cls.backgroundColor)        
+        loadDirectory = LoadDirectory()
+        launchButton = LaunchButton()
+
+        self.screen.add_widget(loadCard)
+        self.screen.add_widget(loadDirectory)
+        self.screen.add_widget(launchButton)
+        # print([widget for widget in self.screen.children if widget.name == "LoadCard"][0].buttonText)
+        return self.screen
 
 if __name__ == "__main__":
    app = EngineParser()
