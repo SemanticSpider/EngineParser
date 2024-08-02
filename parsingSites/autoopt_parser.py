@@ -3,7 +3,7 @@ import sys
 import requests
 from bs4 import BeautifulSoup
 
-article = "50-1601215"
+article = "ТС107-1306100-06М24"
 
 url = f"https://www.autoopt.ru/search/index?search={article}"
 
