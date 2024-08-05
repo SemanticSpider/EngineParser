@@ -10,6 +10,10 @@ from kivy.uix.button import Button
 from kivymd.uix.button import MDButton
 from plyer import filechooser
 import os
+import pandas as pd
+import openpyxl as op
+from openpyxl import load_workbook
+import re
 
 class LoadCard(MDCard):
 
@@ -48,7 +52,6 @@ class LoadCard(MDCard):
             self.cardColor = [1.0, 0.0, 0.0, 0.5]
             self.label = "Принимаются только файлы excel!"
             self.loadFile = ""
-        print(self.loadFile)
 
     # Ограничиваем дефолтное поведение карточки, чтобы убрать автоматическое изменение цвета
     def set_properties_widget(self):
@@ -58,27 +61,27 @@ class LoadCard(MDCard):
     
 class LoadDirectory(MDBoxLayout):
 
-    labelText = StringProperty()
+    savePath = StringProperty()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
         with open(os.path.dirname(os.path.realpath(__file__)) + "\\loadDirectory.txt", "a+") as loadDir:
             loadDir.seek(0, 0)
-            self.labelText = loadDir.read()
+            self.savePath = loadDir.read()
     
     def chooseDirectory(self):
 
         def selectDirectory(selectedDirectory):
-            self.labelText = selectedDirectory = selectedDirectory[0] if(len(selectedDirectory)) != 0 else self.labelText
+            self.savePath = selectedDirectory = selectedDirectory[0] if(len(selectedDirectory)) != 0 else self.savePath
             with open(os.path.dirname(os.path.realpath(__file__)) + "\\loadDirectory.txt", "w") as loadDir:
-                loadDir.write(self.labelText)
+                loadDir.write(self.savePath)
 
         directory = filechooser.choose_dir(on_selection=selectDirectory)
 
 class LaunchButton(MDButton):
-    def launchParse(self):
-        print(self)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 # Класс окна
 class Root(MDScreen):
@@ -105,6 +108,71 @@ class EngineParser(MDApp):
         self.screen.add_widget(launchButton)
         # print([widget for widget in self.screen.children if widget.name == "LoadCard"][0].buttonText)
         return self.screen
+    
+    def launchParse(self, **kwargs):
+        properties = {widget.name: widget for widget in self.screen.children if widget.name in ["LoadCard", "LoadDirectory"]}
+        loadFile, savePath = [properties["LoadCard"].loadFile, properties["LoadDirectory"].savePath]
+        result = self.excelFormat(loadFile)
+        print(result)
+    
+    def excelFormat(self, excelFile):
+        # Читаем с openpyxl
+        wb = load_workbook(excelFile, data_only=True)
+        sheet = wb.active
+
+        df = pd.DataFrame(sheet.values)
+
+        artikulMas, name, col, price, cost = [pd.Series()]*5
+
+        dataDeletePattern = re.compile(r"(?:(?<=[ ])\d{2}[\.-]\d{2}[\.-]\d{4}\b)|(?:(?<=[ ])\d{4}[\.-]\d{2}[\.-]\d{2}[ :-]?(?:\d{2}[ :]\d{2}[ :]\d{2})?\b)|(?:(?<=[ ])\b(?:\d{2}[\.-]){2}[А-ЯA-Z]+\b)")
+        # artikulSearch = re.compile(r"(?:\b(?:\d+[ ])+\d+\b)|(?:\b[A-Z]+[\. -]?(?:\d+[\.-]?)+\b)|(?:\b(?<![\.,])(?<!ГОСТ )(?:[A-ZА-Я\d]+[\.-])+[A-ZА-Я\d]+\b)|(?:\b\d+[A-ZА-Я]+\d+\b)|(?:\b(?<!ГОСТ )\d{5,}[A-ZА-Я]+\b)|(?:\b(?<!ГОСТ )\d{7,}\b)|(?:\b(?:[A-ZА-Я]\([A-ZА-Я]\)-\d+)\b)")
+        artikulSearch = re.compile(r"(?:\b(?<![\.,])(?<!ГОСТ )(?:[A-ZА-Я\d]+[\.-])+[A-ZА-Я\d]+\b)|(?:\b(?:\d+[ ])+\d+\b)|(?:\b[A-Z]+[\. -]?(?:\d+[\.-]?)+\b)|(?:\b\d+[A-ZА-Я]+\d+\b)|(?:\b(?<!ГОСТ )\d{5,}[A-ZА-Я]+\b)|(?:\b(?<!ГОСТ )\d{7,}\b)|(?:\b(?:[A-ZА-Я]\([A-ZА-Я]\)-\d+)\b)")
+        
+
+        while(df.iloc[0].isna().sum() == df.iloc[0].size):
+            df = df.drop(df.index[0])
+        for index, column in df.items():
+            if(column.isna().sum() == column.size): 
+                df = df.drop(index, axis=1)
+                continue
+
+            if(column.astype(str).str.contains(dataDeletePattern).any()): 
+                df[index], column = [column.astype(str).str.replace(dataDeletePattern, "", regex=True)]*2
+
+            if(column.astype(str).str.contains(r"(?:[Аа]ртикул)|(?:[Кк]аталожный номер)").any()): artikulMas = artikulMas.combine(column, lambda s1, s2: s1 if s2 == None else s2).dropna()
+            elif(column.astype(str).str.contains(artikulSearch).any()):
+                artikulMas = column.dropna() if artikulMas.empty else artikulMas.combine(column, lambda s1, s2: s2 if s1 == None else s1).dropna()
+
+            # if(column.astype(str).str.contains(artikulSearch).any()): artikulMas = artikulMas.combine_first(column.dropna())
+            # if(column.astype(str).str.contains(r"(?<!\d{2}.)\d{2,}[\.-]\d{3,}(([\.-]\d+)+)?").any()): artikulMas.append(column.dropna())
+            if(column.astype(str).str.contains(r"(?:[Нн]аименование)|(?:ТМЦ)").any()): name = column.dropna()
+            elif(column.astype(str).str.contains(r"[Кк]ол-во").any()): col = column.dropna()
+            elif(column.astype(str).str.contains(r"[Цц]ена").any()): price = column.dropna()
+            elif(column.astype(str).str.contains(r"(?:[Сс]тоимость)|([Сс]умма)").any()): cost = column.dropna()
+            
+        resultObject = {
+            "goods": [],
+            "errors": []
+        }          
+        for index, artikul in artikulMas.items():
+            search = re.findall(artikulSearch, str(artikul))
+            if len(search) != 0:
+                mainArtikul = search[0]
+                if len(search) > 1:
+                    for artikul in search:
+                        if len(re.sub(r"[ \.-]", "", artikul)) > len(re.sub(r"[ \.-]", "", mainArtikul)): mainArtikul = artikul
+                resultObject["goods"].append({
+                    "mainArtikul": mainArtikul,
+                    "artikuls": search,
+                    "name": name.loc[index] if not name.empty and index in name.index else None,
+                    "amount": col.loc[index] if not col.empty and index in name.index else None,
+                    "price": price.loc[index] if not price.empty and index in name.index else None,
+                    "cost": cost.loc[index] if not cost.empty and index in name.index else None,
+                })
+            else: resultObject["errors"].append(artikul)
+        return resultObject
+
+    
 
 if __name__ == "__main__":
    app = EngineParser()
