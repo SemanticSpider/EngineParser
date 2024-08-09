@@ -155,7 +155,7 @@ count = 1
 for article in articles:
 
 
-	href_product = get_href_product(article=article)
+	href_product = get_href_product(article)
 
 	# sleep_time = uniform(7, 10)
 	# sleep(sleep_time)
