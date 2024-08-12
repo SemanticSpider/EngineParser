@@ -20,6 +20,7 @@ import requests
 from time import sleep
 from random import uniform
 from bs4 import BeautifulSoup
+from random import randint
 
 class LoadCard(MDCard):
 
@@ -119,15 +120,9 @@ class EngineParser(MDApp):
         properties = {widget.name: widget for widget in self.screen.children if widget.name in ["LoadCard", "LoadDirectory"]}
         loadFile, savePath = [properties["LoadCard"].loadFile, properties["LoadDirectory"].savePath]
         goodsExcelInfo = self.excelFormat(loadFile)
-        goodsParseInfo = []
-        for goods in goodsExcelInfo["goods"]:
-            print(goods["mainArtikul"])
-            good = self.get_product_info(goods["mainArtikul"])
-            goodsParseInfo.append(good)
-            sleep_time = uniform(5, 7)
-            sleep(sleep_time)
-        with open("data.json", "w", encoding="utf-8") as file:
-            json.dump(goodsParseInfo, file, ensure_ascii=False)
+        self.searchBenefit(goodsExcelInfo)
+
+
 
     
     def excelFormat(self, excelFile):
@@ -154,9 +149,11 @@ class EngineParser(MDApp):
             if(column.astype(str).str.contains(dataDeletePattern).any()): 
                 df[index], column = [column.astype(str).str.replace(dataDeletePattern, "", regex=True)]*2
 
-            if(column.astype(str).str.contains(r"(?:[Аа]ртикул)|(?:[Кк]аталожный номер)").any()): artikulMas = artikulMas.combine(column, lambda s1, s2: s1 if s2 == None else s2).dropna()
-            elif(column.astype(str).str.contains(artikulSearch).any()):
-                artikulMas = column.dropna() if artikulMas.empty else artikulMas.combine(column, lambda s1, s2: s2 if s1 == None else s1).dropna()
+            if(column.astype(str).str.contains(r"(?:[Аа]ртикул)|(?:[Кк]аталожный номер)").any()): artikulMas = column.dropna()
+
+            # if(column.astype(str).str.contains(r"(?:[Аа]ртикул)|(?:[Кк]аталожный номер)").any()): artikulMas = artikulMas.combine(column, lambda s1, s2: s1 if s2 == None else s2).dropna()
+            # elif(column.astype(str).str.contains(artikulSearch).any()):
+            #     artikulMas = column.dropna() if artikulMas.empty else artikulMas.combine(column, lambda s1, s2: s2 if s1 == None else s1).dropna()
 
             # if(column.astype(str).str.contains(artikulSearch).any()): artikulMas = artikulMas.combine_first(column.dropna())
             # if(column.astype(str).str.contains(r"(?<!\d{2}.)\d{2,}[\.-]\d{3,}(([\.-]\d+)+)?").any()): artikulMas.append(column.dropna())
@@ -168,9 +165,15 @@ class EngineParser(MDApp):
         resultObject = {
             "goods": [],
             "errors": []
-        }          
-        for index, artikul in artikulMas.items():
-            search = re.findall(artikulSearch, str(artikul))
+        }  
+
+        for index, goodsName in name.items():
+            if index in artikulMas.index:
+                print(artikulMas.loc[index], " => ", re.search(artikulSearch, str(artikulMas.loc[index])))
+                search = re.split(r"/", str(artikulMas.loc[index])) if re.search(artikulSearch, str(artikulMas.loc[index])) else []
+            else:
+                search = re.findall(artikulSearch, str(goodsName))
+                
             if len(search) != 0:
                 mainArtikul = search[0]
                 if len(search) > 1:
@@ -184,7 +187,7 @@ class EngineParser(MDApp):
                     "price": price.loc[index] if not price.empty and index in name.index else None,
                     "cost": cost.loc[index] if not cost.empty and index in name.index else None,
                 })
-            else: resultObject["errors"].append(artikul)
+            else: resultObject["errors"].append(goodsName)
         return resultObject
     
     def get_product_info(self, article):
@@ -236,13 +239,22 @@ class EngineParser(MDApp):
             ).find(
                 "a", class_="n-catalog-item__name-link"
             ).text.strip()
+
+
+            # получение цен товара с разными днями доставки
+            if product.find("offers") == None:
+                pass
+            else:
+                product_prices = product.find(
+                    "offers")
+                print(json.loads(product_prices[":offers"])[0])              
+                product_price_obj = [{"Цена": product["price"], "Количество": product["quantity"], "Доставка": product["deliveryDate"]} for product in json.loads(product_prices[":offers"])]
             
-            product_price_obj = {}
             # получение цен товара
             if product.find("div", class_="n-catalog-item__price-box col-12 col-md pr-0 mb-2") == None:
                 pass
             else:
-
+                product_price_obj = {}
                 product_prices = product.find(
                     "div", class_="n-catalog-item__price-box col-12 col-md pr-0 mb-2"
                 ).find(
@@ -257,7 +269,7 @@ class EngineParser(MDApp):
                     type_price = price.find(
                         class_="fake mr-2 link-color price5").text.strip()
                     cur_price = price.find(class_="gray").text
-                    product_price_obj[type_price] = cur_price
+                    product_price_obj[type_price] = re.search(r"\d+(?:[.]\d+)?", cur_price).group(0)
 
             # получение количества товаров
             count = product.find(
@@ -283,17 +295,40 @@ class EngineParser(MDApp):
                     ).get(":offers")
                     product_count = json.loads(product_count)[0]["quantity"]
 
-            result_mas.append(
-                {
-                    "Код товара": product_code,
-                    "Бренд товара": product_brand,
-                    "Артикул товара": product_article,
-                    "Цены товара": product_price_obj,
-                    "Количество на складе": product_count,
-                }
-            )
+            product_info = {
+                "Код товара": product_code,
+                "Бренд товара": product_brand,
+                "Артикул товара": product_article,
+                "Цены товара": product_price_obj,
+                "Количество на складе": product_count,
+            }
+
+            # minIndex = None
+            # if len(product_info["Цены товара"]) == {}:
+            #     for index, res in enumerate(result_mas):
+            #         if len(res["Цены товара"]) == 0:
+            #             minIndex = index
+            #             break
+            #         if float(product_info["Цены товара"]["Розница"]) <= float(res["Цены товара"]["Розница"]):
+            #             minIndex = index
+            #             break
+            # if minIndex != None: result_mas.insert(minIndex, product_info)
+            # else: result_mas.append(product_info)
+            result_mas.append(product_info)
         
         return result_mas
+    
+    def searchBenefit(self, excelInfo):
+        autooptGoods = []
+        for goods in excelInfo["goods"]:
+            print(goods["mainArtikul"])
+            good = self.get_product_info(goods["mainArtikul"])
+            autooptGoods.append(good)
+            sleep_time = uniform(5, 7)
+            sleep(sleep_time)
+        
+        with open("data.json", "w", encoding="utf-8") as file:
+            json.dump(autooptGoods, file, ensure_ascii=False)
 
     
 
