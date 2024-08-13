@@ -52,7 +52,7 @@
         MDTextField:
             mode: "outlined"
             readonly: True
-            text: root.labelText
+            text: root.savePath
             MDTextFieldLeadingIcon:
                 icon: "folder-check-outline"
                 
@@ -66,6 +66,6 @@
     name: "LaunchButton"
     id: "LaunchButton"
     pos_hint: {"center_x": .5, "center_y": .09}
-    on_release: root.launchParse
+    on_release: app.launchParse()
     MDButtonText:
         text: "Начать поиск"
