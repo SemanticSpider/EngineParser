@@ -247,7 +247,7 @@ class EngineParser(MDApp):
             else:
                 product_prices = product.find(
                     "offers")
-                print(json.loads(product_prices[":offers"])[0])              
+                # print(json.loads(product_prices[":offers"])[0])              
                 product_price_obj = [{"Цена": product["price"], "Количество": product["quantity"], "Доставка": product["deliveryDate"]} for product in json.loads(product_prices[":offers"])]
             
             # получение цен товара
@@ -262,8 +262,6 @@ class EngineParser(MDApp):
                 ).find_all(
                     "li"
                 )
-
-
 
                 for price in product_prices:
                     type_price = price.find(
@@ -297,6 +295,7 @@ class EngineParser(MDApp):
 
             product_info = {
                 "Код товара": product_code,
+                "Название": product_name,
                 "Бренд товара": product_brand,
                 "Артикул товара": product_article,
                 "Цены товара": product_price_obj,
@@ -320,15 +319,76 @@ class EngineParser(MDApp):
     
     def searchBenefit(self, excelInfo):
         autooptGoods = []
+
+        with open("data.json", "w", encoding="utf-8") as file:
+            json.dump(excelInfo["goods"], file, ensure_ascii=False)
+
         for goods in excelInfo["goods"]:
             print(goods["mainArtikul"])
-            good = self.get_product_info(goods["mainArtikul"])
-            autooptGoods.append(good)
+
+            exel_count = goods["amount"]
+            good_offers = self.get_product_info(goods["mainArtikul"])
+
+            best_offer = {
+                "Название": goods["name"],
+                "Артикул": goods["mainArtikul"],
+                "Цена": 0.00,
+                "Количество": 0,
+                "Источник": "АвтоАльянс",
+                "Бренд": "",
+            }
+            current_price = 1000000000.00
+
+            for offer in  good_offers:
+
+                if type(offer['Цены товара']) == dict:
+
+                    if type(offer['Количество на складе']) == int:
+                        site_count = int(offer['Количество на складе'])
+                    else:
+                        site_count = 0
+
+                    if int(exel_count) <= int(site_count):
+                        
+                        if float(offer['Цены товара']['Опт 3']) < float(current_price):
+                            current_price = float(offer['Цены товара']['Опт 3'])
+
+                            best_offer["Количество"] = offer['Количество на складе']
+                            best_offer["Цена"] = current_price
+                            best_offer["Артикул"] = offer["Артикул товара"]
+                            best_offer["Бренд"] = offer["Бренд товара"]
+                            best_offer["Название"] = offer["Название"]
+                else:
+
+                    for analog_offer in offer['Цены товара']:
+
+                        if type(analog_offer['Количество']) == int:
+                            site_count = int(analog_offer['Количество'])
+                        else:
+                            site_count = 0
+
+                        if int(exel_count) <= int(site_count):
+                            
+                            if float(analog_offer['Цена']) < float(current_price):
+                                current_price = float(analog_offer['Цена'])
+
+                                best_offer["Количество"] = site_count
+                                best_offer["Цена"] = current_price
+                                best_offer["Артикул"] = offer["Артикул товара"]
+                                best_offer["Бренд"] = offer["Бренд товара"]
+                                best_offer["Название"] = offer["Название"]
+
+                # print(type(offer['Цены товара']) == dict)
+
+            autooptGoods.append(best_offer)
+
+            with open("data1.json", "w", encoding="utf-8") as file:
+                json.dump(autooptGoods, file, ensure_ascii=False)
+
             sleep_time = uniform(5, 7)
             sleep(sleep_time)
         
-        with open("data.json", "w", encoding="utf-8") as file:
-            json.dump(autooptGoods, file, ensure_ascii=False)
+
 
     
 
