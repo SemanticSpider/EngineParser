@@ -1,0 +1,71 @@
+<Root>:
+    name: "Root"
+    md_bg_color: self.theme_cls.backgroundColor
+
+<LoadCard>:
+    name: "LoadCard"
+    id: "LoadCard"
+    orientation: "vertical"
+    padding: 0, "36dp", 0, "36dp"
+    size_hint: .5, .5
+    style: "outlined"
+    pos_hint: {"center_x": .5, "center_y": 0.7}
+    theme_bg_color: "Custom"
+    md_bg_color: root.cardColor
+
+    Image:
+        source: "./style/LoadFile/Document.png"
+
+    MDLabel:
+        text: root.label
+        halign: "center"
+        valign: "center"
+        bold: True
+        font_style: "Display"
+        role: "small"
+
+    MDButton:
+        pos_hint: {"center_x": .5, "center_y": .5}
+        on_release: root.changeFile()
+        MDButtonText:
+            text: "Загрузить файл"
+
+<LoadDirectory>:
+    name: "LoadDirectory"
+    id: "LoadDirectory"
+    orientation: "vertical"
+    adaptive_height: True
+    size_hint: .5, None
+    pos_hint: {"center_x": .5, "center_y": .3}
+    MDLabel:
+        valign: "center"
+        font_style: "Title"
+        bold: True
+        role: "large"
+        text: "Выберите директорию для выгрузки:"
+    
+    MDBoxLayout:
+        padding: 0, dp(20), 0, 0
+        adaptive_height: True
+        spacing: dp(20)
+
+        MDTextField:
+            mode: "outlined"
+            readonly: True
+            text: root.savePath
+            MDTextFieldLeadingIcon:
+                icon: "folder-check-outline"
+                
+        MDButton:
+            pos_hint: {"center_x": .5, "center_y": .5}
+            on_release: root.chooseDirectory()
+            MDButtonText:
+                text: "Выбрать"
+
+<LaunchButton>
+    name: "LaunchButton"
+    id: "LaunchButton"
+    pos_hint: {"center_x": .5, "center_y": .09}
+    on_release: app.launchParse()
+    MDButtonText:
+        text: "Начать поиск"
