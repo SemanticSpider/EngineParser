@@ -22,9 +22,12 @@ import json
 import sys
 import requests
 from time import sleep
+import random
 from random import uniform
 from bs4 import BeautifulSoup
 import threading
+import asyncio
+
 
 class LoadCard(MDCard):
 
@@ -148,7 +151,7 @@ class EngineParser(MDApp):
         def parse(args):
             self = args["self"]
             goodsExcelInfo = self.excelFormat(args["loadFile"])
-            benefitProducts = self.searchBenefit(goodsExcelInfo, args["dialog"])
+            benefitProducts = asyncio.run(self.searchBenefit(goodsExcelInfo, args["dialog"]))
             self.createExcel(masToPush=benefitProducts, pathToSave=args["savePath"], fileName=args["loadFile"].split('\\').pop())
             args["dialog"].dismiss()
 
@@ -291,7 +294,7 @@ class EngineParser(MDApp):
             print("Перед записью закройте эксель")
             return False
     
-    def get_product_info(self, article):
+    async def get_product_info(self, article, productName):
 
         url = f"https://www.autoopt.ru/search/index?search={article}"
         headers = {
@@ -328,15 +331,10 @@ class EngineParser(MDApp):
                 )
         
         if len(all_products) != 0:
-            mainProduct =  all_products[0]
-
-            first_product_url = mainProduct.find(
-                "div", class_="string"
-            ).find(
-                "a", class_="n-catalog-item__name-link"
-            )["href"]
-
-            detail_url = f"https://www.autoopt.ru{first_product_url}"
+            mainProduct = None
+            for product in all_products:
+                if product.find("a", class_="n-catalog-item__name-link").text.strip() == productName : mainProduct = product
+            if mainProduct is None: mainProduct = all_products[0]
 
             # получение кода товара
             product_code = mainProduct.find(
@@ -366,6 +364,8 @@ class EngineParser(MDApp):
                 "a", class_="n-catalog-item__name-link"
             ).text.strip()
 
+            supplier_price =  mainProduct.find("supplier-price")
+            if supplier_price: supplier_price = json.loads(supplier_price.get(":offer"))
 
             # получение цен товара с разными днями доставки
             if mainProduct.find("offers") == None:
@@ -380,21 +380,23 @@ class EngineParser(MDApp):
                 pass
             else:
                 product_price_obj = {}
-                product_prices = mainProduct.find(
+
+                product_prices_div = mainProduct.find(
                     "div", class_="n-catalog-item__price-box col-12 col-md pr-0 mb-2"
-                ).find(
-                    "ul"
-                ).find_all(
-                    "li"
                 )
 
-
-
-                for price in product_prices:
-                    type_price = price.find(
-                        class_="fake mr-2 link-color price5").text.strip()
-                    cur_price = price.find(class_="gray").text
-                    product_price_obj[type_price] = re.search(r"\d+(?:[.]\d+)?", cur_price).group(0)
+                if supplier_price: product_price_obj["Опт 3"] = supplier_price["price"]
+                else:
+                    product_prices = product_prices_div.find(
+                        "ul"
+                    ).find_all(
+                        "li"
+                    )
+                    for price in product_prices:
+                        type_price = price.find(
+                            class_="fake mr-2 link-color price5").text.strip()
+                        cur_price = price.find(class_="gray").text
+                        product_price_obj[type_price] = re.search(r"\d+(?:[.]\d+)?", cur_price).group(0)
 
             # получение количества товаров
             count = mainProduct.find(
@@ -415,14 +417,21 @@ class EngineParser(MDApp):
                 if count != None:
                     product_count = count.text
                 else:
-                    product_count = mainProduct.find(
+                    offers = mainProduct.find(
                         "offers"
-                    ).get(":offers")
-                    product_count = json.loads(product_count)[0]["quantity"]
+                    )
+                    if offers != None:
+                        product_count = offers.get(":offers")
+                        product_count = json.loads(product_count)[0]["quantity"]
+                    elif mainProduct.find("supplier-price") != None:
+                        # print("SUPER PRODUCT COUNT", product_count.text)
+                        product_count = supplier_price["quantity"]
+                        
 
 
             product_info = {
                 "Код товара": product_code,
+                "Название": product_name,
                 "Название": product_name,
                 "Бренд товара": product_brand,
                 "Артикул товара": product_article,
@@ -431,125 +440,270 @@ class EngineParser(MDApp):
             }
 
             result_mas.append(product_info)
+            
 
-            req = requests.get(detail_url, headers=headers)
+            first_product_url = mainProduct.find(
+                "div", class_="string"
+            ).find(
+                "a", class_="n-catalog-item__name-link"
+            )
+
+            first_product_url = first_product_url.get("href")
+            # Если есть ссылка на детальную страницу
+            if first_product_url:  
+
+                detail_url = f"https://www.autoopt.ru{first_product_url}"
+
+                req = requests.get(detail_url, headers=headers)
+
+                src = req.text
+
+                detail_page = BeautifulSoup(src, "lxml")
+                
+                if  detail_page.find("div", class_="table-responsive-md analogs-container"):
+                    analog_mas = detail_page.find(
+                        "div", class_="table-responsive-md analogs-container"
+                    ).find_all(
+                        "div", class_="n-catalog-item n-catalog-item__product-item relative grid-item"
+                    )
+
+                    for analog in analog_mas:
+                        # получение кода товара
+                        analog_code = analog.find(
+                            "div", class_="n-catalog-item__photo-code"
+                        ).find(
+                            "span", class_="string bold n-catalog-item__click-copy"
+                        ).text
+
+                        # получение названия бренда товара
+                        analog_brand = analog.find(
+                            "div", class_="n-catalog-item__brand d-md-table-cell n-catalog-clear"
+                        ).find(
+                            "div", class_="d-md-none__search"
+                        )
+
+                        analog_brand = analog_brand.find("a").text.strip() if analog_brand.find("a") else analog_brand.text.strip()
+
+                        # получение артикула товара
+                        analog_article_container = analog.find(
+                            "div", class_="n-catalog-item__article"
+                        )
+                        analog_article = analog_article_container.find(
+                            "span", class_="string bold nowrap n-catalog-item__click-copy"
+                        ).text + ", " + analog_article_container.find(
+                            "span", class_="string nowrap n-catalog-item__click-copy n-catalog-item__articles"
+                        ).text
+
+                        # получение названия товара
+                        analog_name = analog.find(
+                            "div", class_="n-catalog-item__name"
+                        ).find(
+                            "a", class_="n-catalog-item__name-link actions name-popover"
+                        ).text.strip()
+
+
+                        # получение цен товара с разными днями доставки
+                        if analog.find("offers") == None:
+                            pass
+                        else:
+                            analog_prices = analog.find(
+                                "offers")            
+                            analog_price_obj = [{"Цена": price["price"], "Количество": price["quantity"], "Доставка": price["deliveryDate"]} for price in json.loads(analog_prices[":offers"])]
+                        
+                        # получение цен товара
+                        if analog.find("div", class_="n-catalog-item__price-box col-12 col-md pr-0 mb-2") == None:
+                            pass
+                        else:
+                            analog_price_obj = {}
+                            analog_prices = analog.find(
+                                "div", class_="n-catalog-item__price-box col-12 col-md pr-0 mb-2"
+                            ).find(
+                                "ul"
+                            ).find_all(
+                                "li"
+                            )
+
+
+
+                            for price in analog_prices:
+                                type_price = price.find(
+                                    class_="fake mr-2 link-color price3").text.strip()
+                                cur_price = price.find(class_="gray").text
+                                analog_price_obj[type_price] = re.search(r"\d+(?:[.]\d+)?", cur_price).group(0)
+
+                        # получение количества товаров
+                        count = analog.find(
+                            "span", class_="fake grass bold mr-0"
+                        )
+
+                        if count != None:
+                            analog_count = analog.find(
+                                "div", class_="n-catalog-item__count-box"
+                            ).find(
+                                "span", class_="fake grass bold mr-0"
+                            ).text.strip()[:-1]
+                            analog_count = int(analog_count)
+                        else:
+                            count = analog.find(
+                                "span", class_="fake link-gray"
+                            )
+                            if count != None:
+                                analog_count = count.text
+                            else:
+                                analog_count = analog.find(
+                                    "offers"
+                                ).get(":offers")
+                                analog_count = json.loads(analog_count)[0]["quantity"]
+
+
+                        analog_info = {
+                            "Код товара": analog_code,
+                            "Название": analog_name,
+                            "Бренд товара": analog_brand,
+                            "Артикул товара": analog_article,
+                            "Цены товара": analog_price_obj,
+                            "Количество на складе": analog_count,
+                        }
+
+                        result_mas.append(analog_info)
+        await asyncio.sleep(0)
+        return result_mas
+
+    async def get_info_autopiter(self, article):
+            
+        # Список прокси
+        proxies = [
+            "http://JI2BQ8T6G7:dqSy5wPIKv@103.82.103.8:40253",
+            "http://qrX2br:0SrrNc@88.218.75.218:9367",
+            "http://qrX2br:0SrrNc@88.218.72.250:9833"
+        ]
+
+        # Заголовки для запроса
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            # "Set-Cookie": "guestId=XOuTXkQ01GTNSUl3c_p3f; Max-Age=2592000;"
+        }
+
+        # Функция для получения случайного прокси
+        def get_proxy(proxies):
+            proxy = random.choice(proxies)
+            return {"http": proxy, "https": proxy}
+
+        def get_href_product(article):
+
+            url = f"https://autopiter.ru/goods/{article}"
+            print(article)
+        
+            proxy = get_proxy(proxies)
+            # print(proxy)
+
+            req = requests.get(url, headers=headers)
 
             src = req.text
-
-            detail_page = BeautifulSoup(src, "lxml")
             
-            if  detail_page.find("div", class_="table-responsive-md analogs-container"):
-                analog_mas = detail_page.find(
-                    "div", class_="table-responsive-md analogs-container"
-                ).find_all(
-                    "div", class_="n-catalog-item n-catalog-item__product-item relative grid-item"
+            soup = BeautifulSoup(src, "lxml")
+
+            product = soup.find("div", "IndividualTableRow__row___111l8")
+
+            if product:                    
+                product_href = product.find(
+                    "div", class_="IndividualTableRow__numberColumn___36MQf"
+                ).find("a", class_="IndividualTableRow__numberLink___1-eq1 common__link___1TmCU").get("href")
+            
+            else: return None
+            return product_href
+        
+        def get_product_info_autopiter(href):
+
+            url_product = f"https://autopiter.ru{href}"
+
+            req_product = requests.get(url_product, headers=headers)
+
+            src_product = req_product.text
+
+            soup_product = BeautifulSoup(src_product, "lxml")
+            
+            table_info = soup_product.find(
+                "table", class_="NonRetailAppraiseTable__table___7gnpi"
+            )
+
+
+            # Если таблица с информацией не найдена
+            if table_info == None:
+                return {}
+
+            products_information = table_info.find("tbody").find_all(
+                "tr", class_="NonRetailAppraiseTR__tr___3rq83"
+            )
+
+            full_product_info = []
+
+            for product_info in products_information:
+                
+                # Получение региона продукта
+                product_region = product_info.find(
+                    "div", class_="NonRetailAppraiseTR__regionInner___3FAjj"
+                ).text
+
+                # Получение бренда продукта
+                product_brand = product_info.find(
+                    "span", class_="NonRetailAppraiseTR__brandLink___v2r3Y ModalButton__root___pxLdy"
+                ).find(
+                    "span", class_="ModalButton__button___3fjTP new-common__unstyledButton___zigzA"
+                ).text
+
+                # Получение артикула продукта
+                product_article = product_info.find_all("td")[2].text
+
+                # Получение имени продукта
+                product_name = product_info.find(
+                    "td", class_="NonRetailAppraiseTR__nameCell___2k4_I"
+                ).find("div").text
+
+                # Получение количетсва продукта
+                product_count = product_info.find(
+                    "td", class_="NonRetailAppraiseTR__quantityCell___nzLgM"
+                ).find(
+                    "div", class_="NonRetailAppraiseTR__quantity___18gVh"
+                ).text
+
+                # Получение информации через сколько придет продукт
+                product_time = product_info.find(
+                    "td", class_="NonRetailAppraiseTR__daysCell___YR7jI"
+                ).find("span", "NonRetailAppraiseTR__days___UfW_V").text
+
+                # Получение стоимости продукта
+                product_price = product_info.find(
+                    "td", "NonRetailAppraiseTR__priceCell___2hvw7"
+                ).find("div", "NonRetailAppraiseTR__priceWrapper___2sj3p").text
+
+
+                full_product_info.append(
+                    {
+                        "Регион поставщика": product_region,
+                        "Производитель": product_brand,
+                        "Номер": product_article,
+                        "Наименование": product_name,
+                        "Наличие, шт": product_count,
+                        "Срок (дн)": product_time,
+                        "Цена": product_price,
+                    }
                 )
 
-                for analog in analog_mas:
-                    # получение кода товара
-                    analog_code = analog.find(
-                        "div", class_="n-catalog-item__photo-code"
-                    ).find(
-                        "span", class_="string bold n-catalog-item__click-copy"
-                    ).text
+            return full_product_info
+        
+        href = get_href_product(article)    
+        await asyncio.sleep(0)
 
-                    # получение названия бренда товара
-                    analog_brand = analog.find(
-                        "div", class_="n-catalog-item__brand d-md-table-cell n-catalog-clear"
-                    ).find(
-                        "div", class_="d-md-none__search"
-                    )
+        if href:
+            product_info = get_product_info_autopiter(href)
+            if product_info: return product_info
 
-                    analog_brand = analog_brand.find("a").text.strip() if analog_brand.find("a") else analog_brand.text.strip()
-
-                    # получение артикула товара
-                    analog_article_container = analog.find(
-                        "div", class_="n-catalog-item__article"
-                    )
-                    analog_article = analog_article_container.find(
-                        "span", class_="string bold nowrap n-catalog-item__click-copy"
-                    ).text + ", " + analog_article_container.find(
-                        "span", class_="string nowrap n-catalog-item__click-copy n-catalog-item__articles"
-                    ).text
-
-                    # получение названия товара
-                    analog_name = analog.find(
-                        "div", class_="n-catalog-item__name"
-                    ).find(
-                        "a", class_="n-catalog-item__name-link actions name-popover"
-                    ).text.strip()
-
-
-                    # получение цен товара с разными днями доставки
-                    if analog.find("offers") == None:
-                        pass
-                    else:
-                        analog_prices = analog.find(
-                            "offers")            
-                        analog_price_obj = [{"Цена": price["price"], "Количество": price["quantity"], "Доставка": price["deliveryDate"]} for price in json.loads(analog_prices[":offers"])]
-                    
-                    # получение цен товара
-                    if analog.find("div", class_="n-catalog-item__price-box col-12 col-md pr-0 mb-2") == None:
-                        pass
-                    else:
-                        analog_price_obj = {}
-                        analog_prices = analog.find(
-                            "div", class_="n-catalog-item__price-box col-12 col-md pr-0 mb-2"
-                        ).find(
-                            "ul"
-                        ).find_all(
-                            "li"
-                        )
-
-
-
-                        for price in analog_prices:
-                            type_price = price.find(
-                                class_="fake mr-2 link-color price3").text.strip()
-                            cur_price = price.find(class_="gray").text
-                            analog_price_obj[type_price] = re.search(r"\d+(?:[.]\d+)?", cur_price).group(0)
-
-                    # получение количества товаров
-                    count = analog.find(
-                        "span", class_="fake grass bold mr-0"
-                    )
-
-                    if count != None:
-                        analog_count = analog.find(
-                            "div", class_="n-catalog-item__count-box"
-                        ).find(
-                            "span", class_="fake grass bold mr-0"
-                        ).text.strip()[:-1]
-                        analog_count = int(analog_count)
-                    else:
-                        count = analog.find(
-                            "span", class_="fake link-gray"
-                        )
-                        if count != None:
-                            analog_count = count.text
-                        else:
-                            analog_count = analog.find(
-                                "offers"
-                            ).get(":offers")
-                            analog_count = json.loads(analog_count)[0]["quantity"]
-
-
-                    analog_info = {
-                        "Код товара": analog_code,
-                        "Название": analog_name,
-                        "Бренд товара": analog_brand,
-                        "Артикул товара": analog_article,
-                        "Цены товара": analog_price_obj,
-                        "Количество на складе": analog_count,
-                    }
-
-                    result_mas.append(analog_info)
-        with open("data.json", "w", encoding="utf-8") as file:
-            json.dump(result_mas, file, ensure_ascii=False)
-        return result_mas
+        return []
     
     # Поиск выгодных
-    def searchBenefit(self, excelInfo, dialog):
+    async def searchBenefit(self, excelInfo, dialog):
         autooptGoods = []
 
         # Получение индикатора загрузки
@@ -559,9 +713,18 @@ class EngineParser(MDApp):
             Animation(value=(excelInfo["goods"].index(goods) * 100) / len(excelInfo["goods"]), duration=1.).start(progressBar)
             exel_count = goods["amount"]
 
+            autopiterOffers = self.get_info_autopiter
             # Поиск в автоальянсе по артиколу
-            autooptOffers = self.get_product_info(goods["mainArtikul"])
+            autooptOffers = self.get_product_info
 
+            all_search = await asyncio.gather(*[
+                autopiterOffers((goods["mainArtikul"])), 
+                autooptOffers(goods["mainArtikul"], goods["name"])
+            ])
+
+            autopiterOffers = all_search[0]
+            autooptOffers = all_search[1]
+            print("ALL_SEARCH", all_search)
             best_offer = {
                 "Название": goods["name"],
                 "Название из экселя": goods["name"],
