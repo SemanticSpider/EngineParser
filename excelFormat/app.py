@@ -10,7 +10,8 @@ from kivymd.uix.dialog import (MDDialog, MDDialogHeadlineText, MDDialogContentCo
 from kivymd.uix.progressindicator import MDLinearProgressIndicator
 from kivy.properties import StringProperty, NumericProperty, ObjectProperty
 from kivy.uix.button import Button
-from kivymd.uix.button import MDButton
+from kivy.uix.widget import Widget
+from kivymd.uix.button import MDButton, MDButtonText
 from plyer import filechooser
 import os
 import pandas as pd
@@ -27,6 +28,8 @@ from random import uniform
 from bs4 import BeautifulSoup
 import threading
 import asyncio
+import nest_asyncio
+from requests_html import HTMLSession
 
 
 class LoadCard(MDCard):
@@ -110,13 +113,16 @@ class Root(MDScreen):
 class EngineParser(MDApp):
 
     loadProgress = NumericProperty(0)
+    stopParse =  NumericProperty(0)
 
     # Дефолтные настройки приложения
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         Window.maximize()
+        nest_asyncio.apply()
  
     def build(self):
+
         self.loader = MDDialog(
             MDDialogHeadlineText(
                 text="Сбор информации может занять время..."
@@ -131,6 +137,15 @@ class EngineParser(MDApp):
                     theme_bg_color="Custom",
                     track_color=[0.4980, 0.4980, 0.4980, 0.4],
                 ),
+            ),
+            MDDialogButtonContainer(
+                Widget(),
+                MDButton(
+                    MDButtonText(
+                        text="Стоп"
+                    ),
+                    on_release=self.stopLoading
+                )
             )
         )
         self.theme_cls.primary_palette = "Green"
@@ -151,7 +166,7 @@ class EngineParser(MDApp):
         def parse(args):
             self = args["self"]
             goodsExcelInfo = self.excelFormat(args["loadFile"])
-            benefitProducts = asyncio.run(self.searchBenefit(goodsExcelInfo, args["dialog"]))
+            benefitProducts = self.searchBenefit(goodsExcelInfo, args["dialog"])
             self.createExcel(masToPush=benefitProducts, pathToSave=args["savePath"], fileName=args["loadFile"].split('\\').pop())
             args["dialog"].dismiss()
 
@@ -159,13 +174,12 @@ class EngineParser(MDApp):
         loadFile, savePath = [properties["LoadCard"].loadFile, properties["LoadDirectory"].savePath]
 
         if(loadFile):
-            
-
             # loader = LoaderDialog()
             self.loader.open()
             self.loader.auto_dismiss = False
             thread = threading.Thread(target=parse, args=({"self": self, "loadFile": loadFile, "savePath": savePath, "dialog":  self.loader},), daemon=True)
             thread.start()
+            self.parse_thread = thread
     
     def excelFormat(self, excelFile):
         # Читаем с openpyxl
@@ -249,7 +263,7 @@ class EngineParser(MDApp):
                 "Количество",
                 "Количество из экселя",
                 "Источник", 
-                "Бренд"
+                "Производитель"
             ]
 
             # Параметры рамки
@@ -270,7 +284,7 @@ class EngineParser(MDApp):
             row, column = 2, 1
             while len(masToPush) != 0:
                 current = masToPush.pop(0)
-                if current["Количество"] == "Товар не найден" or int(current["Количество"]) < int(current["Количество из экселя"]): 
+                if current["Количество"] == "Товар не найден" or current["Количество"] == "Нет нужного количества": 
                     fill = PatternFill("solid", fgColor="FF3333")
                 else: 
                     fill = PatternFill("none")
@@ -294,7 +308,7 @@ class EngineParser(MDApp):
             print("Перед записью закройте эксель")
             return False
     
-    async def get_product_info(self, article, productName):
+    def get_product_info(self, article, productName):
 
         url = f"https://www.autoopt.ru/search/index?search={article}"
         headers = {
@@ -332,8 +346,28 @@ class EngineParser(MDApp):
         
         if len(all_products) != 0:
             mainProduct = None
+            maxInclude = 0
+
+            # Поиск нужного товара по имени
             for product in all_products:
-                if product.find("a", class_="n-catalog-item__name-link").text.strip() == productName : mainProduct = product
+                checkInclude = 0
+                tagName = product.find("a", class_="n-catalog-item__name-link").text.strip().split()
+                checkProductName = productName.split()
+
+                # Бегам по разибтому имени и смотрим есть ли совпадение с названием с сайта
+                for namePart in checkProductName:
+                    if namePart in tagName:
+                        checkInclude += 1
+
+                if checkInclude > maxInclude:
+                    maxInclude = checkInclude
+                    mainProduct = product
+                # if tagName in productName or productName in tagName: 
+                #     mainProduct = product
+                # tagName = product.find("a", class_="n-catalog-item__name-link").text.strip()
+                # print("AUTOOPT", tagName, productName, tagName in productName or productName in tagName)
+                # if tagName in productName or productName in tagName: 
+                #     mainProduct = product
             if mainProduct is None: mainProduct = all_products[0]
 
             # получение кода товара
@@ -537,11 +571,12 @@ class EngineParser(MDApp):
                         )
 
                         if count != None:
-                            analog_count = analog.find(
-                                "div", class_="n-catalog-item__count-box"
-                            ).find(
-                                "span", class_="fake grass bold mr-0"
-                            ).text.strip()[:-1]
+                            # analog_count = analog.find(
+                            #     "div", class_="n-catalog-item__count-box"
+                            # ).find(
+                            #     "span", class_="fake grass bold mr-0"
+                            # ).text.strip()[:-1]
+                            analog_count = count.text.strip()[:-1]
                             analog_count = int(analog_count)
                         else:
                             count = analog.find(
@@ -566,18 +601,10 @@ class EngineParser(MDApp):
                         }
 
                         result_mas.append(analog_info)
-        await asyncio.sleep(0)
         return result_mas
 
-    async def get_info_autopiter(self, article):
+    def get_info_autopiter(self, article, name):
             
-        # Список прокси
-        proxies = [
-            "http://JI2BQ8T6G7:dqSy5wPIKv@103.82.103.8:40253",
-            "http://qrX2br:0SrrNc@88.218.75.218:9367",
-            "http://qrX2br:0SrrNc@88.218.72.250:9833"
-        ]
-
         # Заголовки для запроса
         headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -585,18 +612,9 @@ class EngineParser(MDApp):
             # "Set-Cookie": "guestId=XOuTXkQ01GTNSUl3c_p3f; Max-Age=2592000;"
         }
 
-        # Функция для получения случайного прокси
-        def get_proxy(proxies):
-            proxy = random.choice(proxies)
-            return {"http": proxy, "https": proxy}
-
-        def get_href_product(article):
+        def get_href_product(article, name):
 
             url = f"https://autopiter.ru/goods/{article}"
-            print(article)
-        
-            proxy = get_proxy(proxies)
-            # print(proxy)
 
             req = requests.get(url, headers=headers)
 
@@ -604,12 +622,39 @@ class EngineParser(MDApp):
             
             soup = BeautifulSoup(src, "lxml")
 
-            product = soup.find("div", "IndividualTableRow__row___111l8")
+            products = soup.findAll("div", "IndividualTableRow__row___111l8")
 
-            if product:                    
-                product_href = product.find(
-                    "div", class_="IndividualTableRow__numberColumn___36MQf"
-                ).find("a", class_="IndividualTableRow__numberLink___1-eq1 common__link___1TmCU").get("href")
+            if len(products) != 0:
+                product_href = None
+                maxInclude = 0
+
+                # Поиск товаров в автопитере
+                for product in products:
+
+                    checkInclude = 0
+                    checkName = name.split()
+
+                    product_tag = product.find(
+                        "div", class_="IndividualTableRow__numberColumn___36MQf"
+                    ).find("a", class_="IndividualTableRow__numberLink___1-eq1 common__link___1TmCU")
+
+                    product_name = product.find("div", class_="IndividualTableRow__descriptionColumn___dFBnQ").find("a").text.strip().split()
+
+                    for namePart in checkName:
+                        if namePart in product_name:
+                            checkInclude += 1
+
+                    if checkInclude > maxInclude:
+                        maxInclude = checkInclude
+                        product_href = product_tag.get("href")
+
+                    # if product_name in name or name in product_name:
+                    #     product_href = product_tag.get("href")
+                    #     break
+                if product_href == None:
+                    product_href = products[0].find(
+                        "div", class_="IndividualTableRow__numberColumn___36MQf"
+                    ).find("a", class_="IndividualTableRow__numberLink___1-eq1 common__link___1TmCU").get("href")
             
             else: return None
             return product_href
@@ -620,6 +665,26 @@ class EngineParser(MDApp):
 
             req_product = requests.get(url_product, headers=headers)
 
+            def render_JS(URL):
+                script = """
+                () => {
+                setTimeout(function(){
+                    document.querySelector(".Button__root___1Fi0b").click()
+                }, 3000);
+                }
+                """
+                session = HTMLSession()
+                r = session.get(URL)
+                r.html.render(sleep=5, timeout=10000, script=script, keep_page=True)
+                session.close()
+                return r.html.text
+            
+            req_product = requests.get(url_product, headers=headers)
+
+            while req_product.status_code != 200:
+                render_JS(url_product)
+                req_product = requests.get(url_product, headers=headers)
+
             src_product = req_product.text
 
             soup_product = BeautifulSoup(src_product, "lxml")
@@ -627,7 +692,6 @@ class EngineParser(MDApp):
             table_info = soup_product.find(
                 "table", class_="NonRetailAppraiseTable__table___7gnpi"
             )
-
 
             # Если таблица с информацией не найдена
             if table_info == None:
@@ -640,7 +704,6 @@ class EngineParser(MDApp):
             full_product_info = []
 
             for product_info in products_information:
-                
                 # Получение региона продукта
                 product_region = product_info.find(
                     "div", class_="NonRetailAppraiseTR__regionInner___3FAjj"
@@ -654,19 +717,22 @@ class EngineParser(MDApp):
                 ).text
 
                 # Получение артикула продукта
-                product_article = product_info.find_all("td")[2].text
+                product_article = product_info.find_all("td")[3].text
 
                 # Получение имени продукта
                 product_name = product_info.find(
                     "td", class_="NonRetailAppraiseTR__nameCell___2k4_I"
                 ).find("div").text
 
+                
                 # Получение количетсва продукта
                 product_count = product_info.find(
                     "td", class_="NonRetailAppraiseTR__quantityCell___nzLgM"
                 ).find(
                     "div", class_="NonRetailAppraiseTR__quantity___18gVh"
-                ).text
+                ).text.strip()
+
+                product_count = int(re.search(r"\d+(?:[.]\d+)?", product_count).group(0))
 
                 # Получение информации через сколько придет продукт
                 product_time = product_info.find(
@@ -676,129 +742,255 @@ class EngineParser(MDApp):
                 # Получение стоимости продукта
                 product_price = product_info.find(
                     "td", "NonRetailAppraiseTR__priceCell___2hvw7"
-                ).find("div", "NonRetailAppraiseTR__priceWrapper___2sj3p").text
+                ).find("div", "NonRetailAppraiseTR__priceWrapper___2sj3p").text.replace(" ", "")
 
+                product_price = int(re.search(r"\d+(?:[.]\d+)?", product_price).group(0))
 
                 full_product_info.append(
                     {
-                        "Регион поставщика": product_region,
-                        "Производитель": product_brand,
-                        "Номер": product_article,
-                        "Наименование": product_name,
-                        "Наличие, шт": product_count,
-                        "Срок (дн)": product_time,
-                        "Цена": product_price,
+                        "Код товара": product_article,
+                        "Название": product_name,
+                        "Бренд товара": product_brand,
+                        "Артикул товара": product_article,
+                        "Цены товара": product_price,
+                        "Количество на складе": product_count,
                     }
                 )
-
             return full_product_info
         
-        href = get_href_product(article)    
-        await asyncio.sleep(0)
-
+        href = get_href_product(article, name)    
         if href:
             product_info = get_product_info_autopiter(href)
             if product_info: return product_info
 
         return []
     
+    # Получение товаров из 1c
+    def get_product_info_1c(self, artikul, name):
+        fileName = ["1c.xlsx", "1с.xlsx", "1c.xls", "1с.xls",]
+        workbook = None
+
+        full_product_info = []
+
+        current = fileName.pop(0)
+        while len(fileName) != 0:
+            try:
+                workbook = load_workbook(current, data_only=True)
+                break
+            except FileNotFoundError:
+                fileName.pop(0)
+
+        if workbook:
+
+            active = workbook.active
+            df = pd.DataFrame(active.values)
+            
+            artikul_column, name_column, col_column, price_column, brand_column  = [pd.Series()]*5
+
+            # Ищем столбец с артикулами
+            for index, column in df.items():
+                if column.astype(str).str.contains(r"(?:[Аа]ртикул)|(?:[Кк]аталожный)|(?:[Нн]омер)").any(): 
+                    artikul_column = column.dropna()
+                elif column.astype(str).str.contains(r"(?:[Нн]азвание)|(?:[Ии]мя)|(?:[Нн]аименование)").any(): 
+                    name_column = column.dropna()
+                elif column.astype(str).str.contains(r"(?:[Бб]р[еэ]нд)|(?:[Пп]роизводитель)").any(): 
+                    brand_column = column.dropna()
+                elif column.astype(str).str.contains(r"(?:[Кк]оличество)|(?:[Кк]ол)").any(): 
+                    col_column = column.dropna()
+                elif column.astype(str).str.contains(r"(?:[Цц]ена)|(?:[Сс]тоимость)").any(): 
+                    price_column = column.dropna()
+
+            # Ищем в файле нужный артикул
+            if not artikul_column.empty:
+
+                loc_current_product = artikul_column.where(artikul_column == artikul).first_valid_index()
+                if loc_current_product:
+                    full_product_info.append({
+                        "Код товара": artikul,
+                        "Название": name_column.loc[loc_current_product] if not name_column.empty else "",
+                        "Бренд товара": brand_column.loc[loc_current_product] if not brand_column.empty else "",
+                        "Артикул товара": artikul,
+                        "Цены товара": price_column.loc[loc_current_product] if not price_column.empty else "",
+                        "Количество на складе": col_column.loc[loc_current_product] if not col_column.empty else "",
+                    })
+                    
+        return full_product_info
+    
     # Поиск выгодных
-    async def searchBenefit(self, excelInfo, dialog):
+    def searchBenefit(self, excelInfo, dialog):
+
         autooptGoods = []
 
         # Получение индикатора загрузки
         progressBar = dialog.ids["content_container"].children[0].children[0] 
 
         for goods in excelInfo["goods"]:
-            Animation(value=(excelInfo["goods"].index(goods) * 100) / len(excelInfo["goods"]), duration=1.).start(progressBar)
-            exel_count = goods["amount"]
+            if self.stopParse == 0:
+                Animation(value=(excelInfo["goods"].index(goods) * 100) / len(excelInfo["goods"]), duration=1.).start(progressBar)
+                exel_count = goods["amount"]
 
-            autopiterOffers = self.get_info_autopiter
-            # Поиск в автоальянсе по артиколу
-            autooptOffers = self.get_product_info
+                searchResult = {}
 
-            all_search = await asyncio.gather(*[
-                autopiterOffers((goods["mainArtikul"])), 
-                autooptOffers(goods["mainArtikul"], goods["name"])
-            ])
+                offers1c = self.get_product_info_1c(goods["mainArtikul"], goods["name"])
 
-            autopiterOffers = all_search[0]
-            autooptOffers = all_search[1]
-            print("ALL_SEARCH", all_search)
-            best_offer = {
-                "Название": goods["name"],
-                "Название из экселя": goods["name"],
-                "Артикул": goods["mainArtikul"],
-                "Артикул из экселя": goods["mainArtikul"],
-                "Цена": 0,
-                "Количество": 0,
-                "Количество из экселя": goods["amount"],
-                "Источник": "АвтоАльянс",
-                "Бренд": "",
-            }
-            current_price = 1000000000.00
-            sub_current_price = 0
+                print("OFFER1c", offers1c)
 
-            for offer in autooptOffers:
+                autopiterOffers = self.get_info_autopiter(goods["mainArtikul"], goods["name"])
 
-                if type(offer['Цены товара']) == dict:
+                # Поиск в автоальянсе по артиколу
+                autooptOffers = self.get_product_info(goods["mainArtikul"], goods["name"])
 
-                    if type(offer['Количество на складе']) == int:
-                        site_count = int(offer['Количество на складе'])
-                    else:
-                        site_count = 0
 
-                    sub_current_price = offer['Цены товара']['Опт 3']
-                    if int(exel_count) <= int(site_count):
-                        
-                        if float(offer['Цены товара']['Опт 3']) < float(current_price):
-                            current_price = float(offer['Цены товара']['Опт 3'])
+                # all_search = await asyncio.gather(*[
+                #     autopiterOffers((goods["mainArtikul"])), 
+                #     autooptOffers(goods["mainArtikul"], goods["name"])
+                # ])
 
-                            best_offer["Количество"] = site_count
-                            best_offer["Количество из экселя"] = goods['amount']
-                            best_offer["Цена"] = current_price
-                            best_offer["Артикул"] = offer["Артикул товара"]
-                            best_offer["Артикул из экселя"] = goods["mainArtikul"]
-                            best_offer["Бренд"] = offer["Бренд товара"]
-                            best_offer["Название"] = offer["Название"]
-                            best_offer["Название из экселя"] = goods["name"]
-                else:
+                # autopiterOffers = all_search[0]
+                # autooptOffers = all_search[1]
 
-                    for analog_offer in offer['Цены товара']:
+                # print("ALL_SEARCH", all_search)
+                best_offer = {
+                    "Название": goods["name"],
+                    "Название из экселя": goods["name"],
+                    "Артикул": goods["mainArtikul"],
+                    "Артикул из экселя": goods["mainArtikul"],
+                    "Цена": 0,
+                    "Количество": 0,
+                    "Количество из экселя": goods["amount"],
+                    "Источник": "",
+                    "Производитель": "",
+                }
+                current_price = 1000000000.00
+                sub_current_price = 0
 
-                        if type(analog_offer['Количество']) == int:
-                            site_count = int(analog_offer['Количество'])
+                # Поиск выгодных в автоальянсе
+                for offer in autooptOffers:
+
+                    if type(offer['Цены товара']) == dict:
+
+                        if type(offer['Количество на складе']) == int:
+                            site_count = int(offer['Количество на складе'])
                         else:
                             site_count = 0
 
-                        sub_current_price = analog_offer['Цена']
+                        sub_current_price = offer['Цены товара']['Опт 3']
                         if int(exel_count) <= int(site_count):
                             
-                            if float(analog_offer['Цена']) < float(current_price):
-                                current_price = float(analog_offer['Цена'])
+                            if float(offer['Цены товара']['Опт 3']) < float(current_price):
+                                current_price = float(offer['Цены товара']['Опт 3'])
 
                                 best_offer["Количество"] = site_count
                                 best_offer["Количество из экселя"] = goods['amount']
                                 best_offer["Цена"] = current_price
                                 best_offer["Артикул"] = offer["Артикул товара"]
                                 best_offer["Артикул из экселя"] = goods["mainArtikul"]
-                                best_offer["Бренд"] = offer["Бренд товара"]
+                                best_offer["Производитель"] = offer["Бренд товара"]
                                 best_offer["Название"] = offer["Название"]
                                 best_offer["Название из экселя"] = goods["name"]
+                                best_offer["Источник"] = "Автоальянс"
+                    else:
 
-                # print(type(offer['Цены товара']) == dict)
-            if len(autooptOffers) != 0 and best_offer["Количество"] == 0:
-                best_offer["Цена"] = sub_current_price
-                best_offer["Количество"] = site_count
-            elif len(autooptOffers) == 0:
-                best_offer["Количество"] = "Товар не найден"
-                best_offer["Цена"] = "Товар не найден"
-            autooptGoods.append(best_offer)
-            sleep_time = uniform(5, 7)
-            sleep(sleep_time)
+                        for analog_offer in offer['Цены товара']:
+
+                            if type(analog_offer['Количество']) == int:
+                                site_count = int(analog_offer['Количество'])
+                            else:
+                                site_count = 0
+
+                            sub_current_price = analog_offer['Цена']
+                            if int(exel_count) <= int(site_count):
+                                
+                                if float(analog_offer['Цена']) < float(current_price):
+                                    current_price = float(analog_offer['Цена'])
+
+                                    best_offer["Количество"] = site_count
+                                    best_offer["Количество из экселя"] = goods['amount']
+                                    best_offer["Цена"] = current_price
+                                    best_offer["Артикул"] = offer["Артикул товара"]
+                                    best_offer["Артикул из экселя"] = goods["mainArtikul"]
+                                    best_offer["Производитель"] = offer["Бренд товара"]
+                                    best_offer["Название"] = offer["Название"]
+                                    best_offer["Название из экселя"] = goods["name"]               
+                                    best_offer["Источник"] = "Автоальянс"            
+
+                # Поиск выгодных в автопитеру
+                for offer in autopiterOffers:
+
+                    if type(offer['Цены товара']) == int:
+
+                        if type(offer['Количество на складе']) == int:
+                            site_count = int(offer['Количество на складе'])
+                        else:
+                            site_count = 0
+
+                        sub_current_price = offer['Цены товара']
+
+                        if int(exel_count) <= int(site_count):
+                            
+                            if float(offer['Цены товара']) < float(current_price):
+                                current_price = float(offer['Цены товара'])
+
+                                best_offer["Количество"] = site_count
+                                best_offer["Количество из экселя"] = goods['amount']
+                                best_offer["Цена"] = current_price
+                                best_offer["Артикул"] = offer["Артикул товара"]
+                                best_offer["Артикул из экселя"] = goods["mainArtikul"]
+                                best_offer["Производитель"] = offer["Бренд товара"]
+                                best_offer["Название"] = offer["Название"]
+                                best_offer["Название из экселя"] = goods["name"]
+                                best_offer["Источник"] = "Автопитер"  
+
+                # Поиск выгодных в 1с
+                for offer in offers1c:
+                    print(offer)
+                    if type(offer['Цены товара']) == int:
+
+                        if type(offer['Количество на складе']) == int:
+                            site_count = int(offer['Количество на складе'])
+                        else:
+                            site_count = 0
+
+                        sub_current_price = offer['Цены товара']
+
+                        if int(exel_count) <= int(site_count):
+                            
+                            if float(offer['Цены товара']) < float(current_price):
+                                current_price = float(offer['Цены товара'])
+
+                                best_offer["Количество"] = site_count
+                                best_offer["Количество из экселя"] = goods['amount']
+                                best_offer["Цена"] = current_price
+                                best_offer["Артикул"] = offer["Артикул товара"]
+                                best_offer["Артикул из экселя"] = goods["mainArtikul"]
+                                best_offer["Производитель"] = offer["Бренд товара"]
+                                best_offer["Название"] = offer["Название"]
+                                best_offer["Название из экселя"] = goods["name"]
+                                best_offer["Источник"] = "1с"        
+
+                    # print(type(offer['Цены товара']) == dict)
+                # if (len(autooptOffers) != 0 and len(autopiterOffers) != 0 and best_offer["Количество"] == 0) or (len(autopiterOffers) != 0 and best_offer["Количество"] == 0) or (len(autooptOffers) != 0 and best_offer["Количество"] == 0):
+
+                if ((len(autooptOffers) != 0 or len(autopiterOffers) != 0 or len(offers1c)) and best_offer["Количество"] == 0):
+                    best_offer["Цена"] = "Нет нужного количества"
+                    best_offer["Количество"] = "Нет нужного количества"
+                elif len(autooptOffers) == 0 and len(autopiterOffers) == 0 and len(offers1c) == 0:
+                    best_offer["Количество"] = "Товар не найден"
+                    best_offer["Цена"] = "Товар не найден"
+
+                autooptGoods.append(best_offer)
+                sleep_time = uniform(2, 3)
+                sleep(sleep_time)
+            else:
+                progressBar.value = 0
+                self.stopParse = 0
+                return autooptGoods
 
         progressBar.value = 0
         return autooptGoods
+    
+    def stopLoading(self, button):
+        self.stopParse = 1
 
     
 
